@@ -7,9 +7,15 @@
 //
 
 import UIKit
+import CoreData
 import Twitter
 
-class TweetTableViewController: UITableViewController, UITextFieldDelegate {
+class TweetTableViewController: UITableViewController, UISearchBarDelegate {
+    
+    // MARK: Model
+    
+    weak var managedObjectContext: NSManagedObjectContext? = (UIApplication.shared.delegate as? AppDelegate)?.persistentContainer.viewContext
+    
     // array of sections // section is an array of tweets
     var tweets = [Array<Twitter.Tweet>]() {
         didSet {
@@ -43,10 +49,13 @@ class TweetTableViewController: UITableViewController, UITextFieldDelegate {
                     if request.parameters == (weakSelf?.lastTwitterRequest?.parameters)! {
                         if !newTweets.isEmpty {
                             weakSelf?.tweets.insert(newTweets, at: 0)
+                            weakSelf?.updateDatabase(withNewTweets: newTweets)
                         }
                     }
                 }
             }
+        } else {
+            self.refreshControl?.endRefreshing()
         }
     }
     
@@ -59,17 +68,62 @@ class TweetTableViewController: UITableViewController, UITextFieldDelegate {
     
     // MARK: - SearchTextField
     
-    @IBOutlet weak var searchTextField: UITextField! {
+    @IBOutlet weak var searchBar: UISearchBar! {
         didSet {
-            searchTextField.delegate = self
-            searchTextField.text = searchText
+            searchBar?.delegate = self
+            searchBar?.text = searchText
         }
     }
     
-    func textFieldShouldReturn(_ textField: UITextField) -> Bool {
-        textField.resignFirstResponder()
-        searchText = textField.text
-        return true
+    func searchBar(_ searchBar: UISearchBar, textDidChange searchText: String) {
+        self.searchText = searchText
+    }
+    
+    private func updateDatabase(withNewTweets newTweets: [Twitter.Tweet]) {
+        managedObjectContext?.perform { [weak weakSelf = self] in
+            for twitterInfo in newTweets {
+                _ = Tweet.tweet(withTwitterInfo: twitterInfo, forSearchTerm: weakSelf?.searchText, inManagedObjectContext: (weakSelf?.managedObjectContext)!)
+            }
+            
+            ((weakSelf?.tabBarController?.viewControllers?.last as? UINavigationController)?.visibleViewController as? HistoryTableViewController)?.searchTermWasChanged(in: weakSelf)
+            
+            do {
+                try weakSelf?.managedObjectContext?.save()
+            } catch let error {
+                print("CoreData Error: \(error)")
+            }
+        }
+        
+        printDatabaseStatistics()
+        print("done printing statistics")
+        
+        self.refreshControl?.endRefreshing()
+    }
+    
+    private func printDatabaseStatistics() {
+        managedObjectContext?.perform { [weak weakSelf = self] in
+            if let results = try? weakSelf?.managedObjectContext!.fetch(NSFetchRequest(entityName: "TwitterUser")) {
+                print("\(results?.count) TwitterUser")
+            }
+            
+            // more efficient:
+            // let tweetCount = self.managedObjectContext!.count(for: NSFetchRequest(entityName: "Tweet", error: nil))
+            let tweetCount = try? weakSelf?.managedObjectContext!.fetch(NSFetchRequest(entityName: "Tweet")).count
+            print("\(tweetCount) Tweets")
+        }
+    }
+    
+    @IBAction func refresh(_ sender: UIRefreshControl) {
+        searchForTweets()
+    }
+    
+    override func prepare(for segue: UIStoryboardSegue, sender: Any?) {
+        if segue.identifier == "TweetersMentioningSearchTerm" {
+            if let tweetersTVC = segue.destination as? TweetersTableViewController {
+                tweetersTVC.mention = searchText
+                tweetersTVC.managedObjectContext = managedObjectContext
+            }
+        }
     }
     
     // MARK: - UITableViewDataSource
